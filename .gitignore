@@ -169,3 +169,8 @@ sphinx_*/
 
 # Rust analyzer configuration
 /rust-project.json
+
+# Ignore build tools
+toolchains/
+anykernel/
+compile.log
