@@ -109,7 +109,6 @@ scm_version()
 	# version is well-defined. If none of the attempted tags exist
 	# or were usable, $count is still empty.
 	if [ -z "${count}" ] || [ "${count}" -gt 0 ]; then
-
 		# If only the short version is requested, don't bother
 		# running further git commands
 		if $short; then
@@ -117,14 +116,8 @@ scm_version()
 			return
 		fi
 
-		# If we are past the tagged commit, we pretty print it.
-		# (like 6.1.0-14595-g292a089d78d3)
-		if [ -n "${count}" ]; then
-			printf "%s%05d" "-" "${count}"
-		fi
-
-		# Add -g and exactly 12 hex chars.
-		printf '%s%.12s' -g "$head"
+                # Add / and exactly 12 hex chars.
+                printf '%s%.12s' "/" "$head"
 	fi
 
 	if ${no_dirty}; then
