@@ -40,6 +40,18 @@ CLEANUP() {
 }
 trap CLEANUP EXIT
 
+SET_CONFIG() {
+    local key="$1"; local val="$2"
+    if [ "$val" = "y" ]; then sed -i "s/^# $key is not set/$key=y/; s/^$key=.*/$key=y/" "arch/arm64/configs/$KERNEL_DEFCONFIG"
+    else sed -i "s/^$key=.*/# $key is not set/" "arch/arm64/configs/$KERNEL_DEFCONFIG"; fi
+}
+
+if [ "${1:-}" == "KSU" ]; then
+    SET_CONFIG CONFIG_KSU y
+else
+    SET_CONFIG CONFIG_KSU n
+fi
+
 # ---------------------------------------------------------------------------
 # Toolchain setup
 # ---------------------------------------------------------------------------
