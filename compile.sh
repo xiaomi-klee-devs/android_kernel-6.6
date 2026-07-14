@@ -40,6 +40,21 @@ CLEANUP() {
 }
 trap CLEANUP EXIT
 
+SET_CONFIG() {
+    local key="$1"; local val="$2"
+    if [ "$val" = "y" ]; then sed -i "s/^# $key is not set/$key=y/; s/^$key=.*/$key=y/" "arch/arm64/configs/$KERNEL_DEFCONFIG"
+    else sed -i "s/^$key=.*/# $key is not set/" "arch/arm64/configs/$KERNEL_DEFCONFIG"; fi
+}
+
+if [ "${1:-}" == "KSU" ]; then
+    SET_CONFIG CONFIG_KSU y
+    SET_CONFIG CONFIG_KSU_KPROBE_HOOKS y
+    curl -L https://raw.githubusercontent.com/KOWX712/KernelSU/refs/heads/master/kernel/setup.sh | bash -s master
+else
+    SET_CONFIG CONFIG_KSU n
+    SET_CONFIG CONFIG_KSU_KPROBE_HOOKS n
+fi
+
 # ---------------------------------------------------------------------------
 # Toolchain setup
 # ---------------------------------------------------------------------------
