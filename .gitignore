@@ -169,3 +169,10 @@ sphinx_*/
 
 # Rust analyzer configuration
 /rust-project.json
+
+# Ignore build tools
+toolchains/
+anykernel/
+anykernel_temp.*/
+compile.log
+rethinking-GKI*zip
