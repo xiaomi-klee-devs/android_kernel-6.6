@@ -1,0 +1,102 @@
+name: Build and publish Kernel
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: 'Runner to use for the build job'
+        required: true
+        default: ubuntu-24.04
+        type: choice
+        options:
+          - self-hosted
+          - ubuntu-24.04
+
+jobs:
+  prepare:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 360
+    outputs:
+      DATE: ${{ steps.setdate.outputs.DATE }}
+    steps:
+      - id: setdate
+        run: |
+          echo "DATE=$(TZ=Asia/Jakarta date +%Y%m%d%H%M)" >> $GITHUB_OUTPUT
+
+  build:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 360
+    needs: prepare
+    strategy:
+      matrix:
+        include:
+          - variant: "staging"
+            root: "KSU"
+          - variant: "staging"
+            root: "NoKSU"
+
+    steps:
+    - name: Checkout Source
+      uses: actions/checkout@v4
+
+    - name: Set environment
+      run: |
+        echo "VARIANT=${{ matrix.variant }}" >> $GITHUB_ENV
+        echo "ROOT=${{ matrix.root }}" >> $GITHUB_ENV
+        echo "DATE=${{ needs.prepare.outputs.DATE }}" >> $GITHUB_ENV
+        echo "ARTIFACT=$GITHUB_WORKSPACE/artifact" >> $GITHUB_ENV
+
+    - name: Building
+      run: |
+        sudo apt install device-tree-compiler -y
+        mkdir -p ${{ env.ARTIFACT }}
+        chmod +x compile.sh && ./compile.sh ${{ env.ROOT }} ${{ env.DATE }} ${{ env.ARTIFACT }}
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: rethinking-${{ env.DATE }}
+        path: ${{ env.ARTIFACT }}/*
+
+  release:
+    needs: [prepare, build]
+    runs-on: ${{ inputs.runner }}
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup git authentication
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/xiaomi-klee-devs/android_kernel-6.6
+
+      - name: Set DATE and TAG
+        run: |
+          echo "TAG=${{ needs.prepare.outputs.DATE }}" >> $GITHUB_ENV
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifact
+
+      - name: Create Git tag
+        run: |
+          git tag -a "$TAG" -m "ilysm tirr"
+          git push origin "$TAG"
+
+      - name: Upload artifacts to release
+        uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ env.TAG }}
+          files: artifact/**
+          body: |
+            Device Target: Generic Kernel Image 6.6
+            Kernel Source: https://github.com/xiaomi-klee-devs/android_kernel-6.6.git
+            Kernel Version: 6.6.142
+            Clang Version: AOSP Clang v23.0.0
