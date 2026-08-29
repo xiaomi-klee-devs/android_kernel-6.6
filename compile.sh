@@ -67,6 +67,21 @@ DOWNLOAD_CLANG() {
     rm -f "${archive}"
 }
 
+set_cfg() {
+	local key="$1"; local val="$2"
+        DEFCONFIG="arch/arm64/configs/${KERNEL_DEFCONFIG}"
+	if [ "$val" = "y" ]; then sed -i "s/^# $key is not set/$key=y/; s/^$key=.*/$key=y/" "$DEFCONFIG"
+	else sed -i "s/^$key=.*/# $key is not set/" "$DEFCONFIG"; fi
+}
+
+case "$1" in
+	KSU)
+		set_cfg CONFIG_KSU y ;;
+	NoKSU)
+		set_cfg CONFIG_KSU n ;;
+	*) echo "Unknown root: $1"; exit 1 ;;
+esac
+
 # ---------------------------------------------------------------------------
 # Build steps
 # ---------------------------------------------------------------------------
@@ -92,8 +107,14 @@ CLEAN_OLD_ZIPS() {
 
 PACKAGE_KERNEL() {
     [ -d "${ANYKERNEL_SRC_DIR}" ] || INFO "Clone AnyKernel3 repo..." && git clone https://github.com/xiaomi-klee-devs/android_AnyKernel3.git "${ANYKERNEL_SRC_DIR}"
-
     local time
+
+    if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+        time="$2"
+    else
+        time="$(date "+%Y%m%d-%H%M%S")"
+    fi
+
     time="$(date "+%Y%m%d-%H%M%S")"
     TEMP_ANY_KERNEL_DIR="$(mktemp -d "${KERNEL_DIR}/anykernel_temp.XXXXXX")"
 
@@ -112,11 +133,15 @@ PACKAGE_KERNEL() {
     cp -v "${kernel_image}" "${TEMP_ANY_KERNEL_DIR}/"
 
     INFO "Creating zip package..."
-    ZIP_NAME="${ZIP_PREFIX}-${time}.zip"
+    ZIP_NAME="${ZIP_PREFIX}-$1-${time}.zip"
     (
         cd "${TEMP_ANY_KERNEL_DIR}"
         zip -r9 "${KERNEL_DIR}/${ZIP_NAME}" ./* > /dev/null
     )
+
+    if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+        cp "${KERNEL_DIR}/${ZIP_NAME}" "$3"
+    fi
 
     OK "Zip package created: ${ZIP_NAME}"
 }
@@ -145,9 +170,10 @@ MAIN() {
 
     BUILD_KERNEL
     CLEAN_OLD_ZIPS
-    PACKAGE_KERNEL
+    PACKAGE_KERNEL "$1" "$2" "$3"
     PRINT_SUMMARY
 }
 
 rm -rf compile.log "${OUT_DIR}"
-MAIN "$@" | tee compile.log
+MAIN "$1" "$2" "$3" | tee compile.log
+
