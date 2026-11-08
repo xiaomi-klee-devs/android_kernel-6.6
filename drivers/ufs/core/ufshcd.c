@@ -10931,7 +10931,14 @@ static struct scsi_driver ufs_dev_wlun_template = {
 	},
 };
 
-static int __init ufshcd_core_init(void)
+/*
+ * The klee bootloader passes initcall_blacklist=ufshcd_core_init, which
+ * would skip this initcall and leave the ufs_device_wlun SCSI driver
+ * unregistered. All UFS LUNs then fail device_links_check_suppliers()
+ * and stay stuck in deferred probe, so no block device ever appears.
+ * Use a different symbol name so the bootloader blacklist cannot match.
+ */
+static int __init ufshcd_core_driver_init(void)
 {
 	int ret;
 
@@ -10951,7 +10958,7 @@ static void __exit ufshcd_core_exit(void)
 	scsi_unregister_driver(&ufs_dev_wlun_template.gendrv);
 }
 
-module_init(ufshcd_core_init);
+module_init(ufshcd_core_driver_init);
 module_exit(ufshcd_core_exit);
 
 MODULE_AUTHOR("Santosh Yaragnavi <santosh.sy@samsung.com>");
