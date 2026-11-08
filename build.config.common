@@ -14,7 +14,7 @@ DTC=$(command -v dtc || { echo "WARNING: $BUILD_CONFIG loaded without Kleaf herm
     echo "${ROOT_DIR}/${BUILDTOOLS_PREBUILT_BIN}/dtc";
 })
 
-KCFLAGS="${KCFLAGS} -D__ANDROID_COMMON_KERNEL__"
+KCFLAGS="${KCFLAGS} -D__ANDROID_COMMON_KERNEL__ -Wno-macro-redefined"
 EXTRA_CMDS=''
 STOP_SHIP_TRACEPRINTK=1
 IN_KERNEL_MODULES=1
