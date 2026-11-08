@@ -10852,7 +10852,7 @@ static struct scsi_driver ufs_dev_wlun_template = {
 	},
 };
 
-static int __init ufshcd_core_init(void)
+static int __init klee_ufshcd_core_init(void)
 {
 	int ret;
 
@@ -10872,7 +10872,7 @@ static void __exit ufshcd_core_exit(void)
 	scsi_unregister_driver(&ufs_dev_wlun_template.gendrv);
 }
 
-module_init(ufshcd_core_init);
+module_init(klee_ufshcd_core_init);
 module_exit(ufshcd_core_exit);
 
 MODULE_AUTHOR("Santosh Yaragnavi <santosh.sy@samsung.com>");
