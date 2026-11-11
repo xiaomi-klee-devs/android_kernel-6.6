@@ -30,12 +30,12 @@ jobs:
       run: |
         sudo apt-get update -y && sudo apt-get install -y device-tree-compiler
         mkdir -p "${{ env.ARTIFACT }}"
-        chmod +x compile.sh && ./compile.sh NoKSU "${{ env.DATE }}" "${{ env.ARTIFACT }}"
+        chmod +x compile.sh && ./compile.sh auto "${{ env.DATE }}" "${{ env.ARTIFACT }}"
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: rethinking-NoKSU-${{ steps.setdate.outputs.DATE }}
+        name: rethinking-kernel-${{ env.DATE }}
         path: ${{ env.ARTIFACT }}/*
 
   release:
@@ -64,7 +64,7 @@ jobs:
     - name: Download all artifacts
       uses: actions/download-artifact@v4
       with:
-        name: rethinking-NoKSU-${{ env.DATE }}
+        name: rethinking-kernel-${{ env.DATE }}
         path: artifact
 
     - name: Create Git tag
@@ -83,5 +83,5 @@ jobs:
           Device Target: Generic Kernel Image 6.6
           Kernel Source: https://github.com/xiaomi-klee-devs/android_kernel-6.6.git
           Kernel Version: 6.6
-          Variant: NoKSU
+          Variant: Auto (NoKSU + KSU if CONFIG_KSU detected)
           Clang: AOSP Clang
