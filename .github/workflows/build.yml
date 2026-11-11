@@ -10,14 +10,20 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 360
-
+    outputs:
+      DATE: ${{ steps.setdate.outputs.DATE }}
     steps:
     - name: Checkout Source
       uses: actions/checkout@v4
 
+    - id: setdate
+      name: Set date
+      run: |
+        echo "DATE=$(TZ=Asia/Jakarta date +%Y%m%d%H%M)" >> $GITHUB_OUTPUT
+
     - name: Set environment
       run: |
-        echo "DATE=$(TZ=Asia/Jakarta date +%Y%m%d%H%M)" >> $GITHUB_ENV
+        echo "DATE=${{ steps.setdate.outputs.DATE }}" >> $GITHUB_ENV
         echo "ARTIFACT=$GITHUB_WORKSPACE/artifact" >> $GITHUB_ENV
 
     - name: Building
@@ -29,5 +35,53 @@ jobs:
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: rethinking-NoKSU-${{ env.DATE }}
+        name: rethinking-NoKSU-${{ steps.setdate.outputs.DATE }}
         path: ${{ env.ARTIFACT }}/*
+
+  release:
+    needs: [build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Setup git authentication
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/xiaomi-klee-devs/android_kernel-6.6
+
+    - name: Set DATE and TAG
+      run: |
+        echo "DATE=${{ needs.build.outputs.DATE }}" >> $GITHUB_ENV
+        echo "TAG=${{ needs.build.outputs.DATE }}" >> $GITHUB_ENV
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: rethinking-NoKSU-${{ env.DATE }}
+        path: artifact
+
+    - name: Create Git tag
+      run: |
+        git tag -a "$TAG" -m "Kernel build $TAG"
+        git push origin "$TAG"
+
+    - name: Upload artifacts to release
+      uses: softprops/action-gh-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ env.TAG }}
+        files: artifact/*
+        body: |
+          Device Target: Generic Kernel Image 6.6
+          Kernel Source: https://github.com/xiaomi-klee-devs/android_kernel-6.6.git
+          Kernel Version: 6.6
+          Variant: NoKSU
+          Clang: AOSP Clang
