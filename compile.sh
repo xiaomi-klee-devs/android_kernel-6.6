@@ -123,7 +123,7 @@ BUILD_VARIANT() {
     INFO "Creating zip package: ${zip_name}..."
     (
         cd "${TEMP_ANY_KERNEL_DIR}"
-        zip -r9 "${KERNEL_DIR}/${ARTIFACT}/${zip_name}" ./* > /dev/null
+        zip -r9 "${ARTIFACT}/${zip_name}" ./* > /dev/null
     )
 
     OK "Zip package created: ${zip_name}"
