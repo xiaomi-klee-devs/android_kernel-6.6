@@ -200,7 +200,6 @@ fi
 
 case "${file_localversion}" in
 -g*)
-	file_localversion="/${file_localversion#-}"
 	scm_version=
 	;;
 esac
