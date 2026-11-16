@@ -251,6 +251,10 @@ void page_cache_ra_unbounded(struct readahead_control *ractl,
 			read_pages(ractl);
 			ractl->_index++;
 			i = ractl->_index + ractl->_nr_pages - index - 1;
+#ifdef CONFIG_ANDROID_VENDOR_OEM_DATA
+			trace_android_vh_page_cache_ra_unbounded(mapping, folio,
+					&ractl->android_oem_data1);
+#endif
 			continue;
 		}
 
@@ -258,6 +262,8 @@ void page_cache_ra_unbounded(struct readahead_control *ractl,
 		folio = filemap_alloc_folio(gfp_mask, 0);
 		if (!folio)
 			break;
+		trace_android_vh_readahead_add_folio(folio, mapping);
+		trace_android_vh_page_cache_ra_mark(folio, nr_to_read - lookahead_size, i);
 		if (filemap_add_folio(mapping, folio, index + i,
 					gfp_mask) < 0) {
 			folio_put(folio);
@@ -270,6 +276,10 @@ void page_cache_ra_unbounded(struct readahead_control *ractl,
 			folio_set_readahead(folio);
 		ractl->_workingset |= folio_test_workingset(folio);
 		ractl->_nr_pages++;
+#ifdef CONFIG_ANDROID_VENDOR_OEM_DATA
+		trace_android_vh_page_cache_ra_unbounded(mapping, folio,
+				&ractl->android_oem_data1);
+#endif
 	}
 
 	/*
@@ -290,7 +300,8 @@ EXPORT_SYMBOL_GPL(page_cache_ra_unbounded);
  * We really don't want to intermingle reads and writes like that.
  */
 static void do_page_cache_ra(struct readahead_control *ractl,
-		unsigned long nr_to_read, unsigned long lookahead_size)
+		unsigned long nr_to_read, unsigned long lookahead_size,
+		bool forced)
 {
 	struct inode *inode = ractl->mapping->host;
 	unsigned long index = readahead_index(ractl);
@@ -308,6 +319,21 @@ static void do_page_cache_ra(struct readahead_control *ractl,
 		nr_to_read = end_index - index + 1;
 
 	page_cache_ra_unbounded(ractl, nr_to_read, lookahead_size);
+#ifdef CONFIG_64BIT
+	if (forced && lru_gen_enabled()) {
+		struct address_space *mapping = ractl->mapping;
+		unsigned long i;
+
+		for (i = 0; i < nr_to_read; i++) {
+			struct folio *folio = filemap_get_folio(mapping, index + i);
+
+			if (!IS_ERR(folio)) {
+				set_bit(PG_oem_reserved_5, folio_flags(folio, 0));
+				folio_put(folio);
+			}
+		}
+	}
+#endif
 }
 
 /*
@@ -332,13 +358,16 @@ void force_page_cache_ra(struct readahead_control *ractl,
 	index = readahead_index(ractl);
 	max_pages = max_t(unsigned long, bdi->io_pages, ra->ra_pages);
 	nr_to_read = min_t(unsigned long, nr_to_read, max_pages);
+#ifdef CONFIG_ANDROID_VENDOR_OEM_DATA
+	trace_android_vh_force_page_cache_ra(mapping, &ractl->android_oem_data1);
+#endif
 	while (nr_to_read) {
 		unsigned long this_chunk = (2 * 1024 * 1024) / PAGE_SIZE;
 
 		if (this_chunk > nr_to_read)
 			this_chunk = nr_to_read;
 		ractl->_index = index;
-		do_page_cache_ra(ractl, this_chunk, 0);
+		do_page_cache_ra(ractl, this_chunk, 0, true);
 
 		index += this_chunk;
 		nr_to_read -= this_chunk;
@@ -483,6 +512,7 @@ static inline int ra_alloc_folio(struct readahead_control *ractl, pgoff_t index,
 	mark = round_down(mark, 1UL << order);
 	if (index == mark)
 		folio_set_readahead(folio);
+	trace_android_vh_readahead_add_folio(folio, ractl->mapping);
 	err = filemap_add_folio(ractl->mapping, folio, index, gfp);
 	if (err) {
 		folio_put(folio);
@@ -504,8 +534,14 @@ void page_cache_ra_order(struct readahead_control *ractl,
 	unsigned int nofs;
 	int err = 0;
 	gfp_t gfp = readahead_gfp_mask(mapping);
+	bool bypass = false;
 
 	if (!mapping_large_folio_support(mapping) || ra->size < 4)
+		goto fallback;
+
+	trace_android_vh_page_cache_ra_order_bypass(ractl, ra, new_order, &gfp,
+						    &bypass);
+	if (bypass)
 		goto fallback;
 
 	limit = min(limit, index + ra->size - 1);
@@ -553,7 +589,7 @@ void page_cache_ra_order(struct readahead_control *ractl,
 	if (!err)
 		return;
 fallback:
-	do_page_cache_ra(ractl, ra->size, ra->async_size);
+	do_page_cache_ra(ractl, ra->size, ra->async_size, false);
 }
 
 /*
@@ -654,7 +690,7 @@ static void ondemand_readahead(struct readahead_control *ractl,
 	 * standalone, small random read
 	 * Read as is, and do not pollute the readahead state.
 	 */
-	do_page_cache_ra(ractl, req_size, 0);
+	do_page_cache_ra(ractl, req_size, 0, false);
 	return;
 
 initial_readahead:
@@ -689,6 +725,8 @@ void page_cache_sync_ra(struct readahead_control *ractl,
 {
 	bool do_forced_ra = ractl->file && (ractl->file->f_mode & FMODE_RANDOM);
 
+	trace_android_vh_page_cache_read(ractl->mapping->host,
+			readahead_index(ractl), req_count);
 	/*
 	 * Even if readahead is disabled, issue this request as readahead
 	 * as we'll need it to satisfy the requested range. The forced
@@ -715,6 +753,8 @@ EXPORT_SYMBOL_GPL(page_cache_sync_ra);
 void page_cache_async_ra(struct readahead_control *ractl,
 		struct folio *folio, unsigned long req_count)
 {
+	trace_android_vh_page_cache_read(ractl->mapping->host,
+			readahead_index(ractl), req_count);
 	/* no readahead */
 	if (!ractl->ra->ra_pages)
 		return;
@@ -812,6 +852,7 @@ void readahead_expand(struct readahead_control *ractl,
 		folio = filemap_alloc_folio(gfp_mask, 0);
 		if (!folio)
 			return;
+		trace_android_vh_readahead_add_folio(folio, mapping);
 		if (filemap_add_folio(mapping, folio, index, gfp_mask) < 0) {
 			folio_put(folio);
 			return;
@@ -839,6 +880,7 @@ void readahead_expand(struct readahead_control *ractl,
 		folio = filemap_alloc_folio(gfp_mask, 0);
 		if (!folio)
 			return;
+		trace_android_vh_readahead_add_folio(folio, mapping);
 		if (filemap_add_folio(mapping, folio, index, gfp_mask) < 0) {
 			folio_put(folio);
 			return;

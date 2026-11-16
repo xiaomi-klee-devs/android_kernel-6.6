@@ -29,6 +29,8 @@ phys_addr_t pvmfw_size;
 #define hyp_percpu_size ((unsigned long)__per_cpu_end - \
 			 (unsigned long)__per_cpu_start)
 
+u64 hyp_lm_size_mb;
+
 static void *vmemmap_base;
 static void *vm_table_base;
 static void *hyp_pgt_base;
@@ -198,6 +200,16 @@ static void hpool_put_page(void *addr)
 	hyp_put_page(&hpool, addr);
 }
 
+u64 hpool_get_free_pages(void)
+{
+	return hyp_pool_free_pages(&hpool);
+}
+
+u64 hpool_get_min_free_pages(void)
+{
+	return hyp_pool_min_free_pages(&hpool);
+}
+
 static int fix_host_ownership_walker(const struct kvm_pgtable_visit_ctx *ctx,
 				     enum kvm_pgtable_walk_flags visit)
 {
@@ -289,6 +301,16 @@ static int fix_host_ownership(void)
 			return ret;
 	}
 
+	/* The stacks sit in the private VA range, not the linear map. */
+	for (i = 0; i < hyp_nr_cpus; i++) {
+		struct kvm_nvhe_init_params *params = per_cpu_ptr(&kvm_init_params, i);
+		u64 start = params->stack_hyp_va - NVHE_STACK_SIZE;
+
+		ret = kvm_pgtable_walk(&pkvm_pgtable, start, NVHE_STACK_SIZE, &walker);
+		if (ret)
+			return ret;
+	}
+
 	return 0;
 }
 
@@ -373,6 +395,10 @@ void __noreturn __pkvm_init_finalise(void)
 		goto out;
 
 	ret = pin_host_tables();
+	if (ret)
+		goto out;
+
+	ret = fix_host_ownership();
 	if (ret)
 		goto out;
 

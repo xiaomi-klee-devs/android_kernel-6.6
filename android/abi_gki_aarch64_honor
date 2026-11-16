@@ -69,6 +69,10 @@
   __traceiter_rpm_return_int
   __tracepoint_rpm_return_int
   __kfifo_len_r
+  sk_net_refcnt_upgrade
+  __d_drop
+  d_delete
+  refcount_dec_and_lock
   mempool_init
   mempool_exit
   dm_register_target
@@ -97,10 +101,16 @@
   vm_normal_folio_pmd
   folios_put_refs
   __trace_bputs
+  __traceiter_android_vh_folio_add_lru
+  __tracepoint_android_vh_folio_add_lru
   __traceiter_android_vh_proactive_compact_wmark_high
   __tracepoint_android_vh_proactive_compact_wmark_high
   __traceiter_android_vh_killed_process
   __tracepoint_android_vh_killed_process
+  __traceiter_android_vh_oom_reaper_delay_bypass
+  __tracepoint_android_vh_oom_reaper_delay_bypass
+  __traceiter_android_vh_thaw_killed_process
+  __tracepoint_android_vh_thaw_killed_process
   __traceiter_android_vh_rwsem_write_wait_finish
   __tracepoint_android_vh_rwsem_write_wait_finish
   __tracepoint_android_rvh_cpuinfo_c_show
@@ -303,3 +313,5 @@
   __tracepoint_android_vh_mutex_unlock_slowpath_bf_wakeq
   __traceiter_android_vh_io_statistics
   __tracepoint_android_vh_io_statistics
+  __traceiter_android_rvh_update_rq_clock_pelt
+  __tracepoint_android_rvh_update_rq_clock_pelt

@@ -141,6 +141,7 @@ enum pageflags {
 	PG_oem_reserved_2,
 	PG_oem_reserved_3,
 	PG_oem_reserved_4,
+	PG_oem_reserved_5,
 #endif
 	__NR_PAGEFLAGS,
 
@@ -579,6 +580,13 @@ PAGEFLAG(Readahead, readahead, PF_NO_COMPOUND)
 #define folio_test_highmem(__f)	is_highmem_idx(folio_zonenum(__f))
 #else
 PAGEFLAG_FALSE(HighMem, highmem)
+#endif
+
+/* Does kmap_local_folio() only allow access to one page of the folio? */
+#ifdef CONFIG_DEBUG_KMAP_LOCAL_FORCE_MAP
+#define folio_test_partial_kmap(f)	true
+#else
+#define folio_test_partial_kmap(f)	folio_test_highmem(f)
 #endif
 
 #ifdef CONFIG_SWAP

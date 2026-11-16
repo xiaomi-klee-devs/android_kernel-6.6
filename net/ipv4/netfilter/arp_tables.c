@@ -110,13 +110,25 @@ static inline int arp_packet_match(const struct arphdr *arphdr,
 	arpptr += dev->addr_len;
 	memcpy(&src_ipaddr, arpptr, sizeof(u32));
 	arpptr += sizeof(u32);
-	tgt_devaddr = arpptr;
-	arpptr += dev->addr_len;
+
+	if (IS_ENABLED(CONFIG_FIREWIRE_NET) && dev->type == ARPHRD_IEEE1394) {
+		if (unlikely(memchr_inv(arpinfo->tgt_devaddr.mask, 0,
+					sizeof(arpinfo->tgt_devaddr.mask))))
+			return 0;
+
+		tgt_devaddr = NULL;
+	} else {
+		tgt_devaddr = arpptr;
+		arpptr += dev->addr_len;
+	}
 	memcpy(&tgt_ipaddr, arpptr, sizeof(u32));
 
 	if (NF_INVF(arpinfo, ARPT_INV_SRCDEVADDR,
 		    arp_devaddr_compare(&arpinfo->src_devaddr, src_devaddr,
-					dev->addr_len)) ||
+					dev->addr_len)))
+		return 0;
+
+	if (tgt_devaddr &&
 	    NF_INVF(arpinfo, ARPT_INV_TGTDEVADDR,
 		    arp_devaddr_compare(&arpinfo->tgt_devaddr, tgt_devaddr,
 					dev->addr_len)))
@@ -690,14 +702,12 @@ static int copy_entries_to_user(unsigned int total_size,
 		const struct xt_entry_target *t;
 
 		e = loc_cpu_entry + off;
-		if (copy_to_user(userptr + off, e, sizeof(*e))) {
-			ret = -EFAULT;
-			goto free_counters;
-		}
-		if (copy_to_user(userptr + off
+		if (copy_to_user(userptr + off, e,
+				 offsetof(struct arpt_entry, counters)) ||
+		    copy_to_user(userptr + off
 				 + offsetof(struct arpt_entry, counters),
 				 &counters[num],
-				 sizeof(counters[num])) != 0) {
+				 sizeof(counters[num]))) {
 			ret = -EFAULT;
 			goto free_counters;
 		}
@@ -1315,9 +1325,8 @@ static int compat_copy_entry_to_user(struct arpt_entry *e, void __user **dstptr,
 
 	origsize = *size;
 	ce = *dstptr;
-	if (copy_to_user(ce, e, sizeof(struct arpt_entry)) != 0 ||
-	    copy_to_user(&ce->counters, &counters[i],
-	    sizeof(counters[i])) != 0)
+	if (copy_to_user(ce, e, offsetof(struct compat_arpt_entry, counters)) ||
+	    copy_to_user(&ce->counters, &counters[i], sizeof(counters[i])))
 		return -EFAULT;
 
 	*dstptr += sizeof(struct compat_arpt_entry);
@@ -1586,18 +1595,29 @@ void arpt_unregister_table(struct net *net, const char *name)
 		__arpt_unregister_table(net, table);
 }
 
+#define DEFINE_ARPT_STANDARD_TARGET(compat)		\
+	{						\
+		.name             = XT_STANDARD_TARGET,	\
+		.targetsize       = sizeof(int),	\
+		.family           = NFPROTO_ARP,	\
+		.has_compat_metadata = compat,		\
+	}
+
 /* The built-in targets: standard (NULL) and error. */
-static struct xt_target arpt_builtin_tg[] __read_mostly = {
-	{
-		.name             = XT_STANDARD_TARGET,
-		.targetsize       = sizeof(int),
-		.family           = NFPROTO_ARP,
 #ifdef CONFIG_NETFILTER_XTABLES_COMPAT
-		.compatsize       = sizeof(compat_int_t),
-		.compat_from_user = compat_standard_from_user,
-		.compat_to_user   = compat_standard_to_user,
+static struct compat_xt_target_ext arpt_std_tg_ext __read_mostly = {
+	.compatsize       = sizeof(compat_int_t),
+	.compat_from_user = compat_standard_from_user,
+	.compat_to_user   = compat_standard_to_user,
+	.target = DEFINE_ARPT_STANDARD_TARGET(true),
+};
+
+#define arpt_std_tg (arpt_std_tg_ext.target)
+#else
+static struct xt_target arpt_std_tg __read_mostly = DEFINE_ARPT_STANDARD_TARGET(false);
 #endif
-	},
+
+static struct xt_target arpt_builtin_tg[] __read_mostly = {
 	{
 		.name             = XT_ERROR_TARGET,
 		.target           = arpt_error,
@@ -1641,19 +1661,25 @@ static int __init arp_tables_init(void)
 		goto err1;
 
 	/* No one else will be downing sem now, so we won't sleep */
-	ret = xt_register_targets(arpt_builtin_tg, ARRAY_SIZE(arpt_builtin_tg));
+	ret = xt_register_target(&arpt_std_tg);
 	if (ret < 0)
 		goto err2;
+
+	ret = xt_register_targets(arpt_builtin_tg, ARRAY_SIZE(arpt_builtin_tg));
+	if (ret < 0)
+		goto err4;
 
 	/* Register setsockopt */
 	ret = nf_register_sockopt(&arpt_sockopts);
 	if (ret < 0)
-		goto err4;
+		goto err8;
 
 	return 0;
 
-err4:
+err8:
 	xt_unregister_targets(arpt_builtin_tg, ARRAY_SIZE(arpt_builtin_tg));
+err4:
+	xt_unregister_target(&arpt_std_tg);
 err2:
 	unregister_pernet_subsys(&arp_tables_net_ops);
 err1:
@@ -1664,6 +1690,7 @@ static void __exit arp_tables_fini(void)
 {
 	nf_unregister_sockopt(&arpt_sockopts);
 	xt_unregister_targets(arpt_builtin_tg, ARRAY_SIZE(arpt_builtin_tg));
+	xt_unregister_target(&arpt_std_tg);
 	unregister_pernet_subsys(&arp_tables_net_ops);
 }
 

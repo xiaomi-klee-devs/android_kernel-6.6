@@ -238,9 +238,9 @@ usrjquota=<file>	 Appoint specified file and type during mount, so that quota
 grpjquota=<file>	 information can be properly updated during recovery flow,
 prjjquota=<file>	 <quota file>: must be in root directory;
 jqfmt=<quota type>	 <quota type>: [vfsold,vfsv0,vfsv1].
-offusrjquota		 Turn off user journalled quota.
-offgrpjquota		 Turn off group journalled quota.
-offprjjquota		 Turn off project journalled quota.
+usrjquota=		 Turn off user journalled quota.
+grpjquota=		 Turn off group journalled quota.
+prjjquota=		 Turn off project journalled quota.
 quota			 Enable plain user disk quota accounting.
 noquota			 Disable all plain disk quota option.
 alloc_mode=%s		 Adjust block allocation policy, which supports "reuse"
@@ -387,6 +387,13 @@ lookup_mode=%s		 Control the directory lookup behavior for casefolded
 					    on-disk `SB_ENC_NO_COMPAT_FALLBACK_FL`
 					    flag.
 			 ================== ========================================
+resizable_tail_secno=%u  Control the number of sections at the tail of the
+			 filesystem reserved for online resizing. Pinned files
+			 will only be allocated within sections 0 to
+			 (MAIN_SECS - resizable_tail_secno) - 1. If set to 0
+			 (default), there is no tail restriction unless running
+			 on a zoned block device where conventional zones are
+			 used.
 ======================== ============================================================
 
 Debugfs Entries

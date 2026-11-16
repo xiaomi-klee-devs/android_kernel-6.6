@@ -230,18 +230,21 @@ int fuse_create_open_backing(
 	backing_dentry = lookup_one_len(fa->in_args[1].value,
 					dir_fuse_dentry->backing_path.dentry,
 					strlen(fa->in_args[1].value));
-	inode_unlock(dir_fuse_inode->backing_inode);
 
-	if (IS_ERR(backing_dentry))
+	if (IS_ERR(backing_dentry)) {
+		inode_unlock(dir_fuse_inode->backing_inode);
 		return PTR_ERR(backing_dentry);
+	}
 
 	if (d_really_is_positive(backing_dentry)) {
+		inode_unlock(dir_fuse_inode->backing_inode);
 		err = -EIO;
 		goto out;
 	}
 
 	err = vfs_create(&nop_mnt_idmap, dir_fuse_inode->backing_inode,
 			 backing_dentry, fci->mode, true);
+	inode_unlock(dir_fuse_inode->backing_inode);
 	if (err)
 		goto out;
 
@@ -269,12 +272,11 @@ int fuse_create_open_backing(
 	fuse_entry->bpf = NULL;
 
 	newent = d_splice_alias(inode, entry);
+	inode = NULL;
 	if (IS_ERR(newent)) {
 		err = PTR_ERR(newent);
 		goto out;
 	}
-
-	inode = NULL;
 	entry = newent ? newent : entry;
 	err = finish_open(file, entry, fuse_open_file_backing);
 
@@ -406,23 +408,26 @@ int fuse_lseek_backing(struct fuse_bpf_args *fa, struct file *file, loff_t offse
 	struct file *backing_file = fuse_file->backing_file;
 	loff_t ret;
 
-	/* TODO: Handle changing of the file handle */
 	if (offset == 0) {
 		if (whence == SEEK_CUR) {
 			flo->offset = file->f_pos;
-			return flo->offset;
+			return 0;
 		}
 
 		if (whence == SEEK_SET) {
 			flo->offset = vfs_setpos(file, 0, 0);
-			return flo->offset;
+			return 0;
 		}
 	}
 
 	inode_lock(file->f_inode);
 	backing_file->f_pos = file->f_pos;
 	ret = vfs_llseek(backing_file, fli->offset, fli->whence);
-	flo->offset = ret;
+
+	if (!IS_ERR(ERR_PTR(ret))) {
+		flo->offset = ret;
+		ret = 0;
+	}
 	inode_unlock(file->f_inode);
 	return ret;
 }
@@ -1045,14 +1050,10 @@ ssize_t fuse_backing_mmap(struct file *file, struct vm_area_struct *vma)
 	if (WARN_ON(file != vma->vm_file))
 		return -EIO;
 
-	vma->vm_file = get_file(backing_file);
-
+	vma_set_file(vma, backing_file);
 	ret = call_mmap(vma->vm_file, vma);
-
 	if (ret)
-		fput(backing_file);
-	else
-		fput(file);
+		return ret;
 
 	if (file->f_flags & O_NOATIME)
 		return ret;
@@ -1195,24 +1196,32 @@ int fuse_handle_backing(struct fuse_entry_bpf *feb, struct inode **backing_inode
 		/* backing inode/path are added in fuse_lookup_backing */
 		break;
 
-	case FUSE_ACTION_REMOVE:
-		iput(*backing_inode);
-		*backing_inode = NULL;
+	case FUSE_ACTION_REMOVE: {
+		struct inode *old_inode = NULL;
+
+		if (backing_inode)
+			old_inode = xchg(backing_inode, NULL);
+		iput(old_inode);
 		path_put_init(backing_path);
 		break;
+	}
 
 	case FUSE_ACTION_REPLACE: {
 		struct file *backing_file = feb->backing_file;
+		struct inode *new_inode;
+		struct inode *old_inode = NULL;
 
 		if (!backing_file)
 			return -EINVAL;
 		if (IS_ERR(backing_file))
 			return PTR_ERR(backing_file);
 
-		if (backing_inode)
-			iput(*backing_inode);
-		*backing_inode = backing_file->f_inode;
-		ihold(*backing_inode);
+		new_inode = backing_file->f_inode;
+		if (backing_inode) {
+			ihold(new_inode);
+			old_inode = xchg(backing_inode, new_inode);
+			iput(old_inode);
+		}
 
 		path_put(backing_path);
 		*backing_path = backing_file->f_path;
@@ -1332,8 +1341,7 @@ struct dentry *fuse_lookup_finalize(struct fuse_bpf_args *fa, struct inode *dir,
 
 		get_fuse_inode(inode)->nodeid = feo->nodeid;
 		ret = d_splice_alias(inode, entry);
-		if (!IS_ERR(ret))
-			inode = NULL;
+		inode = NULL;
 	}
 out:
 	iput(inode);
@@ -1442,7 +1450,7 @@ int fuse_mknod_backing(
 		 */
 		goto out;
 	}
-	inode = fuse_iget_backing(dir->i_sb, fuse_inode->nodeid, backing_inode);
+	inode = fuse_iget_backing(dir->i_sb, 0, d_inode(backing_path.dentry));
 	if (IS_ERR(inode)) {
 		err = PTR_ERR(inode);
 		goto out;
@@ -1882,7 +1890,7 @@ int fuse_link_backing(struct fuse_bpf_args *fa, struct dentry *entry,
 		goto out;
 	}
 
-	fuse_new_inode = fuse_iget_backing(dir->i_sb, fuse_dir_inode->nodeid, backing_dir_inode);
+	fuse_new_inode = fuse_iget_backing(dir->i_sb, 0, d_inode(backing_new_path.dentry));
 	if (IS_ERR(fuse_new_inode)) {
 		err = PTR_ERR(fuse_new_inode);
 		goto out;
@@ -2001,13 +2009,16 @@ void *fuse_getattr_finalize(struct fuse_bpf_args *fa,
 	struct fuse_attr_out *outarg = fa->out_args[0].value;
 	struct inode *inode = entry->d_inode;
 	u64 attr_version = fuse_get_attr_version(get_fuse_mount(inode)->fc);
-	int err = 0;
 
-	/* TODO: Ensure this doesn't happen if we had an error getting attrs in
-	 * backing.
+	/*
+	 * If backing getattr returned an error (such as a transient -ENOENT or
+	 * -ESTALE), do not pass uninitialized/zeroed attributes to finalize_attr,
+	 * as fuse_invalid_attr() will permanently mark the inode bad (FUSE_I_BAD).
 	 */
-	err = finalize_attr(inode, outarg, attr_version, stat);
-	return ERR_PTR(err);
+	if (fa->error_in)
+		return ERR_PTR(fa->error_in);
+
+	return ERR_PTR(finalize_attr(inode, outarg, attr_version, stat));
 }
 
 static void fattr_to_iattr(struct fuse_conn *fc,
@@ -2273,7 +2284,7 @@ int fuse_symlink_backing(
 		 */
 		goto out;
 	}
-	inode = fuse_iget_backing(dir->i_sb, fuse_inode->nodeid, backing_inode);
+	inode = fuse_iget_backing(dir->i_sb, 0, d_inode(backing_path.dentry));
 	if (IS_ERR(inode)) {
 		err = PTR_ERR(inode);
 		goto out;
@@ -2363,8 +2374,11 @@ static bool filldir(struct dir_context *ctx, const char *name, int namelen,
 	return true;
 }
 
-static int parse_dirfile(char *buf, size_t nbytes, struct dir_context *ctx)
+static int parse_dirfile(char *buf, size_t nbytes, struct dir_context *ctx,
+		loff_t next_offset)
 {
+	char *buffstart = buf;
+
 	while (nbytes >= FUSE_NAME_OFFSET) {
 		struct fuse_dirent *dirent = (struct fuse_dirent *) buf;
 		size_t reclen = FUSE_DIRENT_SIZE(dirent);
@@ -2378,12 +2392,18 @@ static int parse_dirfile(char *buf, size_t nbytes, struct dir_context *ctx)
 
 		ctx->pos = dirent->off;
 		if (!dir_emit(ctx, dirent->name, dirent->namelen, dirent->ino,
-				dirent->type))
-			break;
+				dirent->type)) {
+			// If we can't make any progress, user buffer is too small
+			if (buf == buffstart)
+				return -EINVAL;
+			else
+				return 0;
+		}
 
 		buf += reclen;
 		nbytes -= reclen;
 	}
+	ctx->pos = next_offset;
 
 	return 0;
 }
@@ -2430,13 +2450,12 @@ void *fuse_readdir_finalize(struct fuse_bpf_args *fa,
 	struct file *backing_dir = ff->backing_file;
 	int err = 0;
 
-	err = parse_dirfile(fa->out_args[1].value, fa->out_args[1].size, ctx);
+	err = parse_dirfile(fa->out_args[1].value, fa->out_args[1].size, ctx, fro->offset);
 	*force_again = !!fro->again;
 	if (*force_again && !*allow_force)
 		err = -EINVAL;
 
-	ctx->pos = fro->offset;
-	backing_dir->f_pos = fro->offset;
+	backing_dir->f_pos = ctx->pos;
 
 	free_page((unsigned long) fa->out_args[1].value);
 	return ERR_PTR(err);
