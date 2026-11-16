@@ -7,6 +7,30 @@
 #include <ufs/ufshcd.h>
 
 /*
+ * Android vendor UFS drivers (e.g. MediaTek) keep their own copy of
+ * <ufs/ufshcd.h> with the same _UFSHCD_H include guard, which makes the
+ * kernel header - and the Android PM compatibility helpers in it - invisible
+ * in those translation units.  Provide the same helpers here so that
+ * out-of-tree vendor drivers keep building against this tree.
+ */
+#ifndef HAVE_UFSHCD_RPM_GET_SYNC
+static inline int ufshcd_rpm_get_sync(struct ufs_hba *hba)
+{
+	return pm_runtime_get_sync(&hba->ufs_device_wlun->sdev_gendev);
+}
+
+static inline int ufshcd_rpm_put_sync(struct ufs_hba *hba)
+{
+	return pm_runtime_put_sync(&hba->ufs_device_wlun->sdev_gendev);
+}
+
+static inline int ufshcd_rpm_put(struct ufs_hba *hba)
+{
+	return pm_runtime_put(&hba->ufs_device_wlun->sdev_gendev);
+}
+#endif
+
+/*
  * @rtt_cap -  bDeviceRTTCap
  * @nortt - Max outstanding RTTs supported by controller
  */
