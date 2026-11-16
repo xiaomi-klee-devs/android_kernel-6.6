@@ -154,6 +154,7 @@ filegroup(
 
 define_common_kernels(target_configs = {
     "kernel_aarch64": {
+        "clang_autofdo_profile": ":android/gki/aarch64/afdo/kernel.afdo",
         "kmi_symbol_list_strict_mode": True,
         "kmi_symbol_list": "android/abi_gki_aarch64",
         "additional_kmi_symbol_lists": [":aarch64_additional_kmi_symbol_lists"],
@@ -161,7 +162,7 @@ define_common_kernels(target_configs = {
         "protected_exports_list": "android/abi_gki_protected_exports_aarch64",
         "protected_modules_list": ":gki_aarch64_protected_modules",
         "module_implicit_outs": get_gki_modules_list("arm64") + get_kunit_modules_list("arm64"),
-        "make_goals": _GKI_AARCH64_MAKE_GOALS,
+        "make_goals": ["PAHOLE_FLAGS=--btf_gen_floats"] + _GKI_AARCH64_MAKE_GOALS,
         "ddk_headers_archive": ":kernel_aarch64_ddk_headers_archive",
         "extra_dist": [
             ":test_mappings_zip",
@@ -210,6 +211,17 @@ define_common_kernels(target_configs = {
         ],
     },
 })
+
+copy_to_dist_dir(
+    name = "kernel_aarch64_uapi_headers_dist",
+    data = [":kernel_aarch64_uapi_headers"],
+    flat = True,
+)
+
+alias(
+    name = "kernel_uapi_headers_dist",
+    actual = ":kernel_aarch64_uapi_headers_dist",
+)
 
 # Microdroid is not a real device. The kernel image is built with special
 #  configs to reduce the size. Hence, not using mixed build.

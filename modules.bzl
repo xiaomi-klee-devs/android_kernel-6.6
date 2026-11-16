@@ -100,6 +100,7 @@ _ARM64_GKI_MODULES_LIST = [
     "drivers/char/hw_random/cctrng.ko",
     "drivers/misc/open-dice.ko",
     "drivers/ptp/ptp_kvm.ko",
+    "net/tls/tls.ko",
 ]
 # LINT.ThenChange(android/abi_gki_protected_exports_aarch64)
 
@@ -203,6 +204,7 @@ _COMMON_UNPROTECTED_MODULES_LIST = [
     "drivers/block/zram/zram.ko",
     "kernel/kheaders.ko",
     "mm/zsmalloc.ko",
+    "net/tls/tls.ko",
 ]
 # LINT.ThenChange(android/abi_gki_protected_exports_aarch64)
 
