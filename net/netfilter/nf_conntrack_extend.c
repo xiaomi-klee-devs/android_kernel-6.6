@@ -116,8 +116,11 @@ void *nf_ct_ext_add(struct nf_conn *ct, enum nf_ct_ext_id id, gfp_t gfp)
 	if (!new)
 		return NULL;
 
-	if (!ct->ext)
+	if (!ct->ext) {
 		memset(new->offset, 0, sizeof(new->offset));
+		/* ANDROID: gen_id is unused but kept for the KMI */
+		new->gen_id = 0;
+	}
 
 	new->offset[id] = newoff;
 	new->len = newlen;

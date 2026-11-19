@@ -345,8 +345,7 @@ static struct bdi_writeback *inode_to_wb_and_lock_list(struct inode *inode)
 }
 
 struct inode_switch_wbs_context {
-	/* List of queued switching contexts for the wb */
-	struct llist_node	list;
+	struct rcu_work		work;
 
 	/*
 	 * Multiple inodes can be switched at once.  The switching procedure
@@ -356,6 +355,7 @@ struct inode_switch_wbs_context {
 	 * array embedded into struct inode_switch_wbs_context.  Otherwise
 	 * an inode could be left in a non-consistent state.
 	 */
+	struct bdi_writeback	*new_wb;
 	struct inode		*inodes[];
 };
 
@@ -464,11 +464,13 @@ skip_switch:
 	return switched;
 }
 
-static void process_inode_switch_wbs(struct bdi_writeback *new_wb,
-				     struct inode_switch_wbs_context *isw)
+static void inode_switch_wbs_work_fn(struct work_struct *work)
 {
+	struct inode_switch_wbs_context *isw =
+		container_of(to_rcu_work(work), struct inode_switch_wbs_context, work);
 	struct backing_dev_info *bdi = inode_to_bdi(isw->inodes[0]);
 	struct bdi_writeback *old_wb = isw->inodes[0]->i_wb;
+	struct bdi_writeback *new_wb = isw->new_wb;
 	unsigned long nr_switched = 0;
 	struct inode **inodep;
 
@@ -528,40 +530,6 @@ relock:
 	atomic_dec(&isw_nr_in_flight);
 }
 
-void inode_switch_wbs_work_fn(struct work_struct *work)
-{
-	struct bdi_writeback *new_wb = container_of(work, struct bdi_writeback,
-						    switch_work);
-	struct inode_switch_wbs_context *isw, *next_isw;
-	struct llist_node *list;
-
-	list = llist_del_all(&new_wb->switch_wbs_ctxs);
-	/*
-	 * Nothing to do? That would be a problem as references held by isw
-	 * items protect wb from freeing...
-	 */
-	if (WARN_ON_ONCE(!list))
-		return;
-
-	/*
-	 * Grab our reference to wb so that it cannot get freed under us
-	 * after we process all the isw items.
-	 */
-	wb_get(new_wb);
-	/*
-	 * In addition to synchronizing among switchers, I_WB_SWITCH
-	 * tells the RCU protected stat update paths to grab the i_page
-	 * lock so that stat transfer can synchronize against them.
-	 * Let's continue after I_WB_SWITCH is guaranteed to be
-	 * visible.
-	 */
-	synchronize_rcu();
-
-	llist_for_each_entry_safe(isw, next_isw, list, list)
-		process_inode_switch_wbs(new_wb, isw);
-	wb_put(new_wb);
-}
-
 static bool inode_prepare_wbs_switch(struct inode *inode,
 				     struct bdi_writeback *new_wb)
 {
@@ -591,13 +559,6 @@ static bool inode_prepare_wbs_switch(struct inode *inode,
 	return true;
 }
 
-static void wb_queue_isw(struct bdi_writeback *wb,
-			 struct inode_switch_wbs_context *isw)
-{
-	if (llist_add(&isw->list, &wb->switch_wbs_ctxs))
-		queue_work(isw_wq, &wb->switch_work);
-}
-
 /**
  * inode_switch_wbs - change the wb association of an inode
  * @inode: target inode
@@ -611,7 +572,6 @@ static void inode_switch_wbs(struct inode *inode, int new_wb_id)
 	struct backing_dev_info *bdi = inode_to_bdi(inode);
 	struct cgroup_subsys_state *memcg_css;
 	struct inode_switch_wbs_context *isw;
-	struct bdi_writeback *new_wb = NULL;
 
 	/* noop if seems to be already in progress */
 	if (inode->i_state & I_WB_SWITCH)
@@ -628,12 +588,7 @@ static void inode_switch_wbs(struct inode *inode, int new_wb_id)
 	atomic_inc(&isw_nr_in_flight);
 
 	/*
-	 * Paired with synchronize_rcu() in cgroup_writeback_umount():
-	 * holding rcu_read_lock across inode_prepare_wbs_switch()
-	 * (covering the SB_ACTIVE check and the inode grab) and
-	 * wb_queue_isw() ensures synchronize_rcu() cannot return until
-	 * the work is queued, so the subsequent flush_workqueue() will
-	 * wait for the switch.
+	 * Paired with synchronize_rcu() in cgroup_writeback_umount().
 	 */
 	rcu_read_lock();
 	/* find and pin the new wb */
@@ -643,45 +598,59 @@ static void inode_switch_wbs(struct inode *inode, int new_wb_id)
 	if (!memcg_css)
 		goto out_free;
 
-	new_wb = wb_get_create(bdi, memcg_css, GFP_ATOMIC);
+	isw->new_wb = wb_get_create(bdi, memcg_css, GFP_ATOMIC);
 	css_put(memcg_css);
-	if (!new_wb)
+	if (!isw->new_wb)
 		goto out_free;
 
-	if (!inode_prepare_wbs_switch(inode, new_wb))
+	if (!inode_prepare_wbs_switch(inode, isw->new_wb))
 		goto out_free;
 
 	isw->inodes[0] = inode;
 
-	wb_queue_isw(new_wb, isw);
+	/*
+	 * In addition to synchronizing among switchers, I_WB_SWITCH tells
+	 * the RCU protected stat update paths to grab the i_page
+	 * lock so that stat transfer can synchronize against them.
+	 * Let's continue after I_WB_SWITCH is guaranteed to be visible.
+	 */
+	INIT_RCU_WORK(&isw->work, inode_switch_wbs_work_fn);
+	queue_rcu_work(isw_wq, &isw->work);
 	rcu_read_unlock();
 	return;
 
 out_free:
 	rcu_read_unlock();
 	atomic_dec(&isw_nr_in_flight);
-	if (new_wb)
-		wb_put(new_wb);
+	if (isw->new_wb)
+		wb_put(isw->new_wb);
 	kfree(isw);
 }
 
-static bool isw_prepare_wbs_switch(struct bdi_writeback *new_wb,
-				   struct inode_switch_wbs_context *isw,
+static bool isw_prepare_wbs_switch(struct inode_switch_wbs_context *isw,
 				   struct list_head *list, int *nr)
 {
-	struct inode *inode;
+	struct inode *inode, *tmp;
+	LIST_HEAD(scanned);
+	bool full = false;
 
-	list_for_each_entry(inode, list, i_io_list) {
-		if (!inode_prepare_wbs_switch(inode, new_wb))
+	list_for_each_entry_safe_reverse(inode, tmp, list, i_io_list) {
+		list_move(&inode->i_io_list, &scanned);
+
+		if (!inode_prepare_wbs_switch(inode, isw->new_wb))
 			continue;
 
 		isw->inodes[*nr] = inode;
 		(*nr)++;
 
-		if (*nr >= WB_MAX_INODES_PER_ISW - 1)
-			return true;
+		if (*nr >= WB_MAX_INODES_PER_ISW - 1) {
+			full = true;
+			break;
+		}
 	}
-	return false;
+	list_splice(&scanned, list);
+
+	return full;
 }
 
 /**
@@ -696,7 +665,6 @@ bool cleanup_offline_cgwb(struct bdi_writeback *wb)
 {
 	struct cgroup_subsys_state *memcg_css;
 	struct inode_switch_wbs_context *isw;
-	struct bdi_writeback *new_wb;
 	int nr;
 	bool restart = false;
 
@@ -709,21 +677,14 @@ bool cleanup_offline_cgwb(struct bdi_writeback *wb)
 
 	for (memcg_css = wb->memcg_css->parent; memcg_css;
 	     memcg_css = memcg_css->parent) {
-		new_wb = wb_get_create(wb->bdi, memcg_css, GFP_KERNEL);
-		if (new_wb)
+		isw->new_wb = wb_get_create(wb->bdi, memcg_css, GFP_KERNEL);
+		if (isw->new_wb)
 			break;
 	}
-	if (unlikely(!new_wb))
-		new_wb = &wb->bdi->wb; /* wb_get() is noop for bdi's wb */
+	if (unlikely(!isw->new_wb))
+		isw->new_wb = &wb->bdi->wb; /* wb_get() is noop for bdi's wb */
 
 	nr = 0;
-	/*
-	 * Paired with synchronize_rcu() in cgroup_writeback_umount().
-	 * Holding rcu_read_lock across the SB_ACTIVE check, the inode grab
-	 * and wb_queue_isw() ensures synchronize_rcu() cannot return until
-	 * the work is queued, so the subsequent flush_workqueue() will wait
-	 * for the switch.
-	 */
 	rcu_read_lock();
 	spin_lock(&wb->list_lock);
 	/*
@@ -734,22 +695,28 @@ bool cleanup_offline_cgwb(struct bdi_writeback *wb)
 	 * bandwidth restrictions, as writeback of inode metadata is not
 	 * accounted for.
 	 */
-	restart = isw_prepare_wbs_switch(new_wb, isw, &wb->b_attached, &nr);
+	restart = isw_prepare_wbs_switch(isw, &wb->b_attached, &nr);
 	if (!restart)
-		restart = isw_prepare_wbs_switch(new_wb, isw, &wb->b_dirty_time,
-						 &nr);
+		restart = isw_prepare_wbs_switch(isw, &wb->b_dirty_time, &nr);
 	spin_unlock(&wb->list_lock);
 
 	/* no attached inodes? bail out */
 	if (nr == 0) {
 		rcu_read_unlock();
 		atomic_dec(&isw_nr_in_flight);
-		wb_put(new_wb);
+		wb_put(isw->new_wb);
 		kfree(isw);
 		return restart;
 	}
 
-	wb_queue_isw(new_wb, isw);
+	/*
+	 * In addition to synchronizing among switchers, I_WB_SWITCH tells
+	 * the RCU protected stat update paths to grab the i_page
+	 * lock so that stat transfer can synchronize against them.
+	 * Let's continue after I_WB_SWITCH is guaranteed to be visible.
+	 */
+	INIT_RCU_WORK(&isw->work, inode_switch_wbs_work_fn);
+	queue_rcu_work(isw_wq, &isw->work);
 	rcu_read_unlock();
 
 	return restart;
@@ -1183,14 +1150,12 @@ void cgroup_writeback_umount(void)
 	smp_mb();
 
 	if (atomic_read(&isw_nr_in_flight)) {
-		/*
-		 * Paired with rcu_read_lock() in inode_switch_wbs() and
-		 * cleanup_offline_cgwb().  synchronize_rcu() waits for any
-		 * in-flight switcher that already passed the SB_ACTIVE check
-		 * to finish queueing its work, so flush_workqueue() below
-		 * will then drain it.
-		 */
 		synchronize_rcu();
+		/*
+		 * Use rcu_barrier() to wait for all pending callbacks to
+		 * ensure that all in-flight wb switches are in the workqueue.
+		 */
+		rcu_barrier();
 		flush_workqueue(isw_wq);
 	}
 }

@@ -38,6 +38,7 @@ enum nf_ct_ext_id {
 struct nf_ct_ext {
 	u8 offset[NF_CT_EXT_NUM];
 	u8 len;
+	unsigned int gen_id;	/* ANDROID: unused, kept for the KMI */
 	char data[] __aligned(8);
 };
 

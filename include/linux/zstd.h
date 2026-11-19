@@ -160,6 +160,7 @@ typedef ZSTD_parameters zstd_parameters;
 zstd_parameters zstd_get_params(int level,
 	unsigned long long estimated_src_size);
 
+
 /**
  * zstd_get_cparams() - returns zstd_compression_parameters for selected level
  * @level:              The compression level
@@ -171,6 +172,8 @@ zstd_parameters zstd_get_params(int level,
  */
 zstd_compression_parameters zstd_get_cparams(int level,
 	unsigned long long estimated_src_size, size_t dict_size);
+
+/* ======   Single-pass Compression   ====== */
 
 typedef ZSTD_CCtx zstd_cctx;
 typedef ZSTD_cParameter zstd_cparameter;
